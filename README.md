@@ -4,6 +4,14 @@ Finds big copies, panics and bounds checks in LLVM IR (`.ll`). Tested with Rust 
 
 ## Install
 
+From [crates.io](https://crates.io/crates/copyhound):
+
+```sh
+cargo install copyhound
+```
+
+From a checkout of this repository:
+
 ```sh
 cargo install --path .
 ```
