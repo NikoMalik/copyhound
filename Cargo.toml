@@ -1,0 +1,18 @@
+[package]
+name = "copyhound"
+version = "0.1.0"
+edition = "2024"
+description = "Find big memcpys, panics and bounds checks in LLVM IR"
+license = "MIT"
+repository = "https://github.com/NikoMalik/copyhound"
+
+[dependencies]
+rustc-demangle = "0.1"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = true
+incremental = false    
+strip = true           
+
