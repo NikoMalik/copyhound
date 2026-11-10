@@ -308,7 +308,7 @@ fn collect(mut input: impl BufRead, opts: &Options) -> io::Result<Vec<FuncStats>
         }
         match call_target(line) {
             Some(Target::Direct(sym)) if !sym.starts_with("llvm.") => {
-                let callee = demangle(sym);
+                let callee = demangle(&strip_comptime(sym));
                 if let Some(kind) = panic_kind(&callee) {
                     func.panics.add(kind);
                 }
@@ -428,7 +428,37 @@ fn report_diff(
 }
 
 fn demangle(name: &str) -> String {
-    format!("{:#}", rustc_demangle::demangle(name))
+    strip_anon(&format!("{:#}", rustc_demangle::demangle(name)))
+}
+
+fn strip_anon(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut rest = name;
+    while let Some(at) = rest.find("__anon_") {
+        let after = &rest[at + "__anon_".len()..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        out.push_str(&rest[..at]);
+        if digits == 0 {
+            out.push_str("__anon_");
+        }
+        rest = &after[digits..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn strip_comptime(sym: &str) -> String {
+    let mut name = String::with_capacity(sym.len());
+    let mut level = 0u32;
+    for c in sym.chars() {
+        match c {
+            '(' => level += 1,
+            ')' => level = level.saturating_sub(1),
+            _ if level > 0 => {}
+            _ => name.push(c),
+        }
+    }
+    name
 }
 
 fn function_name(define: &str) -> Option<String> {
@@ -548,6 +578,9 @@ fn panic_kind(callee: &str) -> Option<PanicKind> {
     if callee.contains("panic_count") || callee.contains("panic_in_cleanup") {
         return None;
     }
+    if let Some((_, method)) = callee.rsplit_once("Panic.") {
+        return Some(zig_panic_kind(method));
+    }
     if callee.contains("panic_bounds_check")
         || callee.starts_with("core::slice::index::")
         || callee.contains("slice_error_fail")
@@ -560,10 +593,27 @@ fn panic_kind(callee: &str) -> Option<PanicKind> {
     if callee.contains("panic_const") {
         return Some(PanicKind::Overflow);
     }
-    if callee.contains("panic") || callee.contains("capacity_overflow") {
+    if callee.to_ascii_lowercase().contains("panic") || callee.contains("capacity_overflow") {
         return Some(PanicKind::Other);
     }
     None
+}
+
+fn zig_panic_kind(method: &str) -> PanicKind {
+    match method {
+        "outOfBounds" | "startGreaterThanEnd" => PanicKind::Bounds,
+        "unwrapNull" | "unwrapError" => PanicKind::Unwrap,
+        "integerOverflow"
+        | "shlOverflow"
+        | "shrOverflow"
+        | "shiftRhsTooBig"
+        | "divideByZero"
+        | "exactDivisionRemainder"
+        | "negativeToUnsigned"
+        | "castTruncatedData"
+        | "integerPartOutOfBounds" => PanicKind::Overflow,
+        _ => PanicKind::Other,
+    }
 }
 
 #[cfg(test)]
@@ -773,6 +823,51 @@ define void @clean() {
         assert_eq!(
             run_on(CALLS_IR, &["panics", "--deny", "--filter", "clean"]).1,
             0
+        );
+    }
+
+    #[test]
+    fn zig_anon_instance_numbers_are_stripped() {
+        assert_eq!(
+            strip_anon("Io.Writer.printIntAny__anon_8323"),
+            "Io.Writer.printIntAny"
+        );
+        assert_eq!(strip_anon("fmt.Foo__anon_12.bar__anon_7"), "fmt.Foo.bar");
+        assert_eq!(strip_anon("keep__anon_x"), "keep__anon_x");
+        let before = "define void @w.printIntAny__anon_8323() {\n  ret void\n}\n";
+        let after = "define void @w.printIntAny__anon_8401() {\n  ret void\n}\n";
+        let o = opts(&["diff", "a.ll", "b.ll"]);
+        let a = collect(before.as_bytes(), &o).expect("before");
+        let b = collect(after.as_bytes(), &o).expect("after");
+        let mut out = Vec::new();
+        report_diff(&mut out, &a, &b, o.bytes).expect("diff");
+        assert_eq!(String::from_utf8(out).expect("utf8"), "");
+    }
+
+    #[test]
+    fn zig_safety_panics_are_classified() {
+        let ir = "\
+define internal fastcc i32 @safe.pick(ptr %0, i64 %1) unnamed_addr #0 {
+  call fastcc void @\"debug.FullPanic((function 'defaultPanic')).outOfBounds\"(i64 %1, i64 3) #9
+  unreachable
+}
+define internal fastcc i32 @safe.add(i32 %0, i32 %1) unnamed_addr #0 {
+  call fastcc void @\"debug.FullPanic((function 'defaultPanic')).integerOverflow\"() #9
+  call fastcc void @\"debug.FullPanic((function 'defaultPanic')).unwrapNull\"() #9
+  call fastcc void @\"debug.FullPanic((function 'defaultPanic')).reachedUnreachable\"() #9
+  call fastcc void @debug.defaultPanic(ptr %m, i64 3, i64 0) #9
+  ret i32 0
+}
+";
+        assert_eq!(
+            run(ir, &["panics"]),
+            "safe.pick bounds=1 unwrap=0 overflow=0 other=0
+safe.add bounds=0 unwrap=1 overflow=1 other=2
+"
+        );
+        assert_eq!(
+            run(ir, &["calls", "--filter", "pick"]),
+            "safe.pick\n    1 debug.FullPanic.outOfBounds\n"
         );
     }
 

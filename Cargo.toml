@@ -1,6 +1,6 @@
 [package]
 name = "copyhound"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Find big memcpys, panics and bounds checks in LLVM IR"
 license = "MIT"

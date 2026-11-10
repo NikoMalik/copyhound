@@ -109,7 +109,12 @@ criterion::stats::univariate::resamples::Resamples<A>::next bounds=2 unwrap=0 ov
 | `bounds` | `panic_bounds_check`, `core::slice::index::*`, `str` slicing failures |
 | `unwrap` | `Option`/`Result` `unwrap_failed`, `expect_failed` |
 | `overflow` | `panic_const_*`: arithmetic overflow, division by zero, shift overflow |
-| `other` | any other panic, Zig panics too |
+| `other` | any other panic |
+
+For Zig the kind comes from the name of the safety check: `outOfBounds` and `startGreaterThanEnd`
+are `bounds`, `unwrapNull` and `unwrapError` are `unwrap`, `integerOverflow`, shift checks,
+`divideByZero` and truncating casts are `overflow`, the rest (`reachedUnreachable`, `@panic`) is `other`.
+Zig emits these checks only in `Debug` and `ReleaseSafe`, in `ReleaseFast` there is nothing to find.
 
 Not counted: `std::thread::panicking()` checks (`panic_count`), compiler-inserted
 `panic_in_cleanup`, and calls through a function pointer.
@@ -163,6 +168,6 @@ old timestamps.
 
 ## Notes
 
-- Rust names are demangled (`probemap::SwissTable<E,S,A>::insert_inner` instead of `_ZN8probemap...`), Zig comptime arguments are stripped from names
+- Rust names are demangled (`probemap::SwissTable<E,S,A>::insert_inner` instead of `_ZN8probemap...`). Zig names are already readable, only comptime arguments and instance numbers are stripped (`Io.Writer.printIntAny__anon_8323` becomes `Io.Writer.printIntAny`), so `diff` matches them between builds
 - `--filter` matches the demangled name, use it instead of `grep` with `--context` because the output has many lines per hit
 - copies with a size only known at run time are skipped by `memcpy`
